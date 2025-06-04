@@ -1,0 +1,126 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# This script is designed solely for Termux environments.
+
+set -e  # Exit immediately if a command fails
+
+### === [ DEFINE COLORS ] === ###
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'  # No Color
+
+### === [ FUNCTIONS ] === ###
+
+# Detect CPU architecture
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64)  echo "amd64" ;;
+        i386|i686)  echo "i386" ;;
+        aarch64|arm64)  echo "arm64" ;;
+        arm|armv7l|armhf)  echo "arm" ;;
+         *)
+            echo -e "${RED}❌ Unsupported architecture: $(uname -m)${NC}"
+            exit 1
+            ;;
+    esac
+}
+
+# Spinner for asynchronous tasks
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spin='/-\|'
+    while ps -p "$pid" > /dev/null 2>&1; do
+        for i in $(seq 0 3); do
+            echo -ne "\r${spin:i:1}  "
+            sleep "$delay"
+        done
+    done
+    echo -ne "\r   \r"
+}
+
+# Cleanup temporary files upon exit/failure
+cleanup() {
+    [[ -f "$TMP_FILE" ]] && rm -f "$TMP_FILE"
+    [[ -f "$DL_STATUS_FILE" ]] && rm -f "$DL_STATUS_FILE"
+    if [[ "$UNDO_ON_FAIL" == true && -f "$FINAL_PATH" ]]; then
+        echo -e "${RED}⚠️  Installation failed. Removing binary: $FINAL_PATH${NC}"
+        rm -f "$FINAL_PATH"
+    fi
+}
+
+### === [ INSTALLATION LOGIC ] === ###
+
+ARCH=$(detect_arch)
+OS_NAME="linux"  # Termux runs on Linux
+
+# Install location for Termux is $PREFIX/bin
+INSTALL_DIR="${PREFIX}/bin"
+# Allow override via first parameter, if needed
+INSTALL_DIR=${1:-$INSTALL_DIR}
+
+# Ensure curl is installed
+if ! command -v curl >/dev/null 2>&1; then
+    echo -e "${RED}❌ 'curl' is required but not installed. Please run: pkg install curl${NC}"
+    exit 1
+fi
+
+# Ensure write permissions for the install directory
+if [ ! -w "$INSTALL_DIR" ]; then
+    echo -e "${RED}❌ You do not have write permissions to the installation directory: $INSTALL_DIR.${NC}"
+    exit 1
+fi
+
+# Display installation details
+echo -e "${BLUE}📦 tgpt Installer for Termux${NC}"
+echo -e "${BLUE}🖥️  OS: ${OS_NAME}${NC}"
+echo -e "${BLUE}⚙️  Architecture: $ARCH${NC}"
+echo -e "${BLUE}📁 Installation Path: $INSTALL_DIR${NC}"
+echo
+
+read -p "➡️  Proceed with installation? (y/n): " CONFIRM
+if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
+    echo -e "${RED}❌ Installation cancelled by user.${NC}"
+    exit 0
+fi
+
+# Set up download variables
+TGPT_BIN_NAME="tgpt-${OS_NAME}-${ARCH}"
+TGPT_URL="https://github.com/aandrew-me/tgpt/releases/latest/download/${TGPT_BIN_NAME}"
+TMP_FILE=$(mktemp)
+DL_STATUS_FILE=$(mktemp)
+FINAL_PATH="$INSTALL_DIR/tgpt"
+UNDO_ON_FAIL=true
+
+trap cleanup EXIT
+
+echo -e "${BLUE}⬇️  Downloading ${TGPT_BIN_NAME} ...${NC}"
+{
+    curl -fSL --progress-bar "$TGPT_URL" -o "$TMP_FILE"
+    echo $? > "$DL_STATUS_FILE"
+} & spinner $!
+
+wait
+
+if [[ ! -f "$DL_STATUS_FILE" || "$(cat "$DL_STATUS_FILE")" != "0" ]]; then
+    echo -e "${RED}❌ Download failed. Please check the URL or your network connection.${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}📲 Installing...${NC}"
+mv "$TMP_FILE" "$FINAL_PATH"
+chmod +x "$FINAL_PATH"
+
+UNDO_ON_FAIL=false
+
+echo -e "${GREEN}✅ tgpt installed at: ${FINAL_PATH}${NC}"
+
+# Check if the command is in PATH
+if ! command -v tgpt >/dev/null 2>&1; then
+    echo -e "${YELLOW}⚠️  'tgpt' is not in your PATH.${NC}"
+    echo -e "${YELLOW}👉 To add it, include the following line in your shell config:${NC}"
+    echo -e "${YELLOW}    export PATH=\"${INSTALL_DIR}:\$PATH\"${NC}"
+fi
+
+echo -e "${GREEN}🎉 Installation complete. Run 'tgpt -h' for help.${NC}"
